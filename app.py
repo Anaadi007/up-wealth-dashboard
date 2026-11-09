@@ -5,6 +5,7 @@ Reads the cleaned data written by 02_clean_transform.py. All data is synthetic.
 """
 import numpy as np, pandas as pd, streamlit as st, plotly.express as px, plotly.graph_objects as go
 from scipy import stats
+import ml
 
 st.set_page_config(page_title="UP Wealth Management – EDA", page_icon="📊", layout="wide")
 TIERS = ["Tier 1", "Tier 2", "Tier 3"]
@@ -41,7 +42,7 @@ k[0].metric("Respondents", f"{len(s):,}"); k[1].metric("Likely to sign up", pct(
 k[2].metric("Median stated SIP", inr(s.willing_monthly_investment_inr.median())); k[3].metric("Leads", f"{len(p):,}")
 k[4].metric("Lead → client", pct(p.won_flag.mean())); k[5].metric("Median days to close", f"{p.loc[p.won_flag==1,'days_to_close'].median():.0f}")
 
-tab = st.tabs(["Data & cleaning", "Descriptive", "Correlation", "Diagnostic", "Sales pipeline", "Insights"])
+tab = st.tabs(["Data & cleaning", "Descriptive", "Correlation", "Diagnostic", "Classification", "Clustering", "Association rules", "Regression", "Sales pipeline", "Insights"])
 
 # ================= DATA & CLEANING =================
 with tab[0]:
@@ -170,8 +171,91 @@ with tab[3]:
     fig = px.line(G, x="num_goals", y="mean", markers=True, labels={"num_goals": "Number of financial goals", "mean": "Likely to sign up"}, title="Sign-up intent by number of goals"); fig.update_yaxes(tickformat=".0%"); st.plotly_chart(fig, width="stretch")
     st.markdown(f"**Explanation:** intent rises from {pct(G['mean'].iloc[0])} with {G.num_goals.iloc[0]} goals to a peak of {pct(G['mean'].max())}. People with concrete goals see the point of planning, so sales conversations should open with goals, not products.")
 
-# ================= PIPELINE =================
+# ================= CLASSIFICATION =================
+@st.cache_resource(show_spinner="Training classification models…")
+def _clf(): return ml.classification(s_all)
+@st.cache_resource(show_spinner="Checking cluster stability…")
+def _clu(): return ml.clustering(s_all)
+@st.cache_resource(show_spinner="Training spend models…")
+def _reg(): return ml.regression(s_all)
+@st.cache_data
+def _rules(df, sup, conf): return ml.rules(df, sup, conf)
+
 with tab[4]:
+    st.markdown("**What it is:** sorting people into *will sign up* and *won't*, like a spam filter sorts email. Three models were trained on 75% of respondents and tested on the other 25%. They learn only from profile, money, attitude, goal and holdings answers, never from the answer they predict. Models use all respondents, so the sidebar filters don't apply here.")
+    C = _clf(); R = C["results"]; b = R.iloc[0]
+    k = st.columns(4)
+    k[0].metric("Best model", b.model); k[1].metric("AUC", f"{b.auc:.2f}"); k[2].metric("Accuracy", pct(b.accuracy), f"{(b.accuracy - C['baseline'])*100:+.1f} pts vs always 'no'"); k[3].metric("Buyers in top 30%", pct(b.top30))
+    st.dataframe(R.rename(columns={"model": "Model", "auc": "AUC", "accuracy": "Accuracy", "top30": "Share of sign-ups in top 30% by score"}).style.format({"AUC": "{:.3f}", "Accuracy": "{:.1%}", "Share of sign-ups in top 30% by score": "{:.1%}"}), width="stretch", hide_index=True)
+    c1, c2 = st.columns(2)
+    g = C["gains"][b.model]; xs = np.linspace(0, 1, len(g))
+    fig = go.Figure([go.Scatter(x=xs, y=g, name=b.model, line=dict(width=3)), go.Scatter(x=[0, 1], y=[0, 1], name="Random order", line=dict(dash="dash", color="grey"))])
+    fig.update_layout(title="Cumulative gains: who to contact first", xaxis_title="Share of people contacted (highest score first)", yaxis_title="Share of all sign-ups reached", xaxis_tickformat=".0%", yaxis_tickformat=".0%", legend=dict(orientation="h", y=-.25)); c1.plotly_chart(fig, width="stretch")
+    imp = C["importance"].sort_values("coef")
+    fig = px.bar(imp, x="coef", y="feature", orientation="h", color=imp.coef > 0, color_discrete_map={True: "#1f77b4", False: "#d62728"}, labels={"coef": "Standardised coefficient (right = more likely)", "feature": ""}, title="What drives a 'yes' (logistic regression)")
+    fig.update_layout(showlegend=False); c2.plotly_chart(fig, width="stretch")
+    top = C["importance"]; pos = top[top.coef > 0].iloc[0].feature; neg = top[top.coef < 0].iloc[0].feature
+    st.markdown(f"**Explanation:** {b.model} ranks people best (AUC {b.auc:.2f}; 0.5 is a coin toss, 1.0 is perfect). Accuracy is {pct(b.accuracy)}, but always guessing 'no' already scores {pct(C['baseline'])}, so the real value is ranking: the top 30% of people by score contain {pct(b.top30)} of all sign-ups. The strongest push towards 'yes' is **{pos}**; the strongest push away is **{neg}**.")
+    st.markdown(f"**So what:** score every new contact and call the top third first; it reaches about half of likely clients for a third of the effort. Lead marketing with trust and education, and handle past mis-selling head-on.")
+
+# ================= CLUSTERING =================
+with tab[5]:
+    st.markdown("**What it is:** grouping similar people without telling the algorithm the answer. K-Means was run on 13 standardised money, literacy, attitude and holdings answers and found 5 segments. Silhouette (−1 to 1) says how cleanly they separate; the adjusted Rand index (ARI, 0 to 1) says whether the same segments come back when the data is resampled.")
+    K = _clu(); k = st.columns(3)
+    k[0].metric("Segments", "5"); k[1].metric("Silhouette (k = 5)", f"{K['sil5']:.2f}"); k[2].metric("Stability (mean ARI, 10 resamples)", f"{K['ari']:.2f}")
+    P = K["profile"].reset_index()
+    c1, c2 = st.columns(2)
+    fig = px.bar(P, x="sign_up", y="segment", orientation="h", text=P.apply(lambda r: f"{r.sign_up:.0%} · {r.share:.0%} of people", axis=1), labels={"sign_up": "Likely to sign up", "segment": ""}, title="The five segments, from most to least likely to sign up")
+    fig.update_xaxes(tickformat=".0%"); fig.update_yaxes(categoryorder="total ascending"); c1.plotly_chart(fig, width="stretch")
+    fig = px.line(K["sil"], x="k", y="silhouette", markers=True, labels={"k": "Number of segments (k)", "silhouette": "Silhouette score"}, title="How cleanly the groups separate, by k"); c2.plotly_chart(fig, width="stretch")
+    F = K["finger"].loc[P.segment]
+    fig = px.imshow(F, color_continuous_scale="RdYlGn", zmin=-1.2, zmax=1.2, text_auto=".1f", aspect="auto", labels={"color": "vs average (SD)"}, title="Segment fingerprints: green = above average, red = below average"); st.plotly_chart(fig, width="stretch")
+    st.dataframe(P.rename(columns={"segment": "Segment", "people": "People", "sign_up": "Likely to sign up", "median_income_lakh": "Median income (₹ lakh)", "median_monthly_invest": "Median stated SIP (₹/month)", "share": "Share"}).style.format({"Likely to sign up": "{:.1%}", "Share": "{:.1%}", "Median income (₹ lakh)": "{:.1f}", "Median stated SIP (₹/month)": "{:,.0f}"}), width="stretch", hide_index=True)
+    t1, t2 = P.iloc[0], P.iloc[-1]; rich = P.sort_values("median_monthly_invest").iloc[-1]
+    t1b = P.iloc[1]; inv = f"and would also invest the most (median ₹{rich.median_monthly_invest:,.0f} a month)" if rich.segment == t1.segment else f"; **{rich.segment}** would invest the most (median ₹{rich.median_monthly_invest:,.0f} a month)"
+    st.markdown(f"**Explanation:** the segments overlap (silhouette {K['sil5']:.2f}; scores below 0.25 mean weak separation), but they are stable: resampling gives a mean ARI of {K['ari']:.2f}, so the same groups keep coming back. **{t1.segment}** are most likely to sign up ({pct(t1.sign_up)}) {inv}. Next come **{t1b.segment}** ({pct(t1b.sign_up)}). **{t2.segment}** are least likely ({pct(t2.sign_up)}).")
+    st.markdown("**So what:** treat segments as broad profiles for messaging and channel choice, not hard boxes. Start with the top two segments and design a cheaper, education-first offer for the rest.")
+
+# ================= ASSOCIATION RULES =================
+with tab[6]:
+    st.markdown("**What it is:** market-basket analysis: 'people who hold A (and B) also want service C'. Rules are mined from 10 products held and 8 services wanted. **Support** = share of everyone the rule covers; **confidence** = how often it holds; **lift** above 1 = a real link, not chance. This tab follows the sidebar filters.")
+    a1, a2 = st.columns(2)
+    msup = a1.slider("Minimum support", .02, .20, .05, .01); mconf = a2.slider("Minimum confidence", .10, .80, .30, .05)
+    RU = _rules(s, msup, mconf)
+    if len(RU) == 0:
+        st.info("No rules at these settings. Lower the thresholds.")
+    else:
+        top = RU.head(15)
+        fig = px.scatter(RU, x="support", y="confidence", size="lift", color="lift", hover_name="rule", color_continuous_scale="Blues", labels={"support": "Support", "confidence": "Confidence"}, title=f"{len(RU)} rules: support vs confidence (bubble = lift)")
+        fig.update_xaxes(tickformat=".0%"); fig.update_yaxes(tickformat=".0%"); st.plotly_chart(fig, width="stretch")
+        RU["service"] = RU.rule.str.split(" → ").str[-1]
+        best = RU[RU.lift > 1].sort_values("lift", ascending=False).drop_duplicates("service")
+        fmt = {"Support": "{:.1%}", "Confidence": "{:.1%}", "Lift": "{:.2f}"}
+        st.markdown("**Best rule for each service** (highest lift)")
+        st.dataframe(best[["rule", "support", "confidence", "lift"]].rename(columns={"rule": "Rule", "support": "Support", "confidence": "Confidence", "lift": "Lift"}).style.format(fmt), width="stretch", hide_index=True)
+        with st.expander(f"All {len(RU)} rules, strongest first"):
+            st.dataframe(RU[["rule", "support", "confidence", "lift"]].rename(columns={"rule": "Rule", "support": "Support", "confidence": "Confidence", "lift": "Lift"}).style.format(fmt), width="stretch", hide_index=True)
+        r0 = RU.iloc[0]; big = RU.sort_values("support", ascending=False).iloc[0]
+        st.markdown(f"**Explanation:** the strongest link is **{r0.rule}** (confidence {pct(r0.confidence)}, lift {r0.lift:.2f}). The rule covering the most people is **{big.rule}** ({pct(big.support)} of respondents, confidence {pct(big.confidence)}). In the full data, traditional-policy (LIC) holders stand out: about half want an insurance review, roughly 1.4× the average.")
+        st.markdown("**So what:** use what people already hold to choose the opening offer: an insurance review for LIC holders, estate and will planning for property owners. These are natural cross-sell bundles for the first meeting.")
+
+# ================= REGRESSION =================
+with tab[7]:
+    st.markdown("**What it is:** predicting a number, the monthly amount a respondent would invest if guided, from profile, money, attitude and holdings answers. Amounts are very uneven, so the model works on a log scale. Models use all respondents, so the sidebar filters don't apply here.")
+    G = _reg(); RR = G["results"]; bst = RR[RR.model == G["best"]].iloc[0]; base = RR.iloc[0]
+    k = st.columns(4)
+    k[0].metric("Best model", G["best"]); k[1].metric("R² (log scale)", f"{bst.r2:.2f}"); k[2].metric("Median error", f"₹{bst.med_err:,.0f}", f"−₹{base.med_err - bst.med_err:,.0f} vs median guess", delta_color="inverse"); k[3].metric("Median stated SIP", f"₹{G['median']:,.0f}")
+    st.dataframe(RR.rename(columns={"model": "Model", "r2": "R² (log scale)", "med_err": "Median error (₹/month)"}).style.format({"R² (log scale)": "{:.3f}", "Median error (₹/month)": "₹{:,.0f}"}), width="stretch", hide_index=True)
+    c1, c2 = st.columns(2)
+    fig = px.scatter(G["scatter"], x="predicted", y="actual", log_x=True, log_y=True, opacity=.5, labels={"predicted": "Predicted, ₹/month", "actual": "Stated, ₹/month"}, title="Predicted vs stated monthly investment (test set)")
+    lo, hi = G["scatter"].min().min(), G["scatter"].max().max(); fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", line=dict(dash="dash", color="grey"), showlegend=False)); c1.plotly_chart(fig, width="stretch")
+    imp = G["importance"].sort_values("importance")
+    fig = px.bar(imp, x="importance", y="feature", orientation="h", labels={"importance": "Share of the model's decisions", "feature": ""}, title="What drives the amount (gradient boosting)"); fig.update_xaxes(tickformat=".0%"); c2.plotly_chart(fig, width="stretch")
+    st.markdown(f"**Explanation:** {G['best']} explains {bst.r2:.0%} of the variation in (log) investment and cuts the median error from ₹{base.med_err:,.0f} (always guessing the median) to ₹{bst.med_err:,.0f}. Income dominates: it sets what people *can* invest. The mean stated SIP (₹{G['mean']:,.0f}) is far above the median (₹{G['median']:,.0f}) because a few wealthy people state very large amounts.")
+    st.markdown("**So what:** plan revenue on the median client, not the average. Two quick questions (income and expenses) give a good estimate of ticket size before the first meeting, which helps assign the right advisor.")
+
+# ================= PIPELINE =================
+with tab[8]:
     cnt = pd.Series({st_: (p.stage_index >= i).sum() for i, st_ in enumerate(STAGES)})
     fig = go.Figure(go.Funnel(y=STAGES, x=cnt.values, textinfo="value+percent previous+percent initial", marker_color=[COLORS[0]] * 5 + [COLORS[2]]))
     fig.update_layout(title="Sales funnel (pilot, Jul 2025 – Jun 2026)", height=420); st.plotly_chart(fig, width="stretch")
@@ -237,7 +321,7 @@ with tab[4]:
         st.markdown(f"**Explanation:** {pct(W.churned_flag.mean())} of won clients had stopped after a median {W.months_since_onboarding.median():.0f} months. Clients who started below 70% of the proposed SIP churned at {pct(lo_)}, against {pct(hi_)} for the rest, so a low starting commitment is an early warning sign. The window is short, so these are early indicators, not lifetime churn.")
 
 # ================= INSIGHTS =================
-with tab[5]:
+with tab[9]:
     st.subheader("End-to-end validation: the same people's survey answers vs what they did")
     Lk = p_all[p_all.survey_link_valid == 1].merge(s_all[["respondent_id", "likely_to_engage", "willing_monthly_investment_inr"]], left_on="survey_respondent_id", right_on="respondent_id")
     Lk = Lk[Lk.city_tier.isin(tiers) & Lk.segment.isin(segs)]; Lc = Lk[Lk.outcome != "Open"]
@@ -256,6 +340,23 @@ with tab[5]:
     B = pd.DataFrame({"Survey: likely to sign up": sv, "Pipeline: leads won": pv}).reset_index().melt(id_vars="segment")
     fig = px.bar(B, y="segment", x="value", color="variable", barmode="group", orientation="h", labels={"value": "", "segment": "", "variable": ""}, title="Segment level: stated intent vs win rate (non-survey channels)"); fig.update_xaxes(tickformat=".0%"); st.plotly_chart(fig, width="stretch")
     st.markdown("**Explanation:** the segment ranking holds: segments with higher stated intent also win more leads through other channels. Survey respondents and other leads are different groups, so the record-level comparison above is the more reliable test.")
+    st.subheader("Is it viable? Six checks")
+    LkA = p_all[p_all.survey_link_valid == 1].merge(s_all[["respondent_id", "likely_to_engage"]], left_on="survey_respondent_id", right_on="respondent_id")
+    LkA = LkA[(LkA.outcome != "Open") & LkA.city_tier.isin(tiers) & LkA.segment.isin(segs)]
+    wy = LkA[LkA.likely_to_engage == "Yes"].won_flag.mean(); wn = LkA[LkA.likely_to_engage == "No"].won_flag.mean()
+    Wn = p[p.won_flag == 1]; cpc = p.acquisition_cost_inr.sum() / max(len(Wn), 1); rpc = p.first_year_trail_revenue_inr.sum() / max(len(Wn), 1)
+    lowtrust = (s.trust_in_advisors <= 2).mean()
+    V = pd.DataFrame([
+        ["Demand", "At least 30% of respondents likely to sign up", pct(s.engage_flag.mean()), s.engage_flag.mean() >= .30],
+        ["Survey is believable", "'Likely' respondents convert at least 2× the rest", f"{wy/wn:.1f}×" if wn > 0 else "n/a", (wy / wn >= 2) if wn > 0 else False],
+        ["Sales conversion", "At least 10% of leads become clients", pct(p.won_flag.mean()), p.won_flag.mean() >= .10],
+        ["Unit economics", "Year-1 trail revenue per client covers its acquisition cost", f"₹{rpc:,.0f} vs ₹{cpc:,.0f}", rpc >= cpc],
+        ["Retention", "At most 10% of clients stop within the pilot", pct(Wn.churned_flag.mean()) if len(Wn) else "n/a", (Wn.churned_flag.mean() <= .10) if len(Wn) else False],
+        ["Trust", "At most 40% rate trust in advisors 1–2", pct(lowtrust), lowtrust <= .40]], columns=["Check", "Pass if", "Result", "pass"])
+    V["Status"] = np.where(V["pass"], "✅ Pass", "❌ Fail")
+    st.dataframe(V.drop(columns="pass"), width="stretch", hide_index=True)
+    st.markdown(f"**Explanation:** {int(V['pass'].sum())} of 6 checks pass. The thresholds are judgement calls set for this study, not industry standards. " + ("Low trust is the one that fails, which matches every other tab: trust is the barrier to fix first. " if not V.iloc[-1]["pass"] else "") + f"Unit economics pass only narrowly (₹{rpc:,.0f} earned against ₹{cpc:,.0f} spent per client in year 1), so channel mix matters.")
+    st.markdown("**So what:** promising, but not proven. Start asset-light with referrals, CA/doctor partners and survey opt-ins, build trust signals before scaling paid channels, and confirm with a real survey.")
     st.subheader("Key insights")
     st.markdown("""
 1. **Demand is real but concentrated.** It is strongest among affluent professionals and conservative salaried households. Lower Tier 3 intent reflects lower income, awareness and trust, not geography itself.
@@ -264,4 +365,5 @@ with tab[5]:
 4. **The pipeline leaks both before and after the first meeting, in roughly equal measure.** Survey opt-ins, referrals and CA/doctor partners convert best and repay their acquisition cost within a year. A same-day response, 3–5 follow-ups and in-person meetings help. Seminars, ads and RWA camps take 2–4 years to pay back.
 5. **The survey predicts behaviour.** For the same people, 'likely' respondents became clients about 3.6× as often, and stated and actual SIPs rank almost identically.
 6. **Lost reasons differ by segment.** Business families need trust-building, young earners a hybrid app-plus-advisor offer, conservative savers FD alternatives, and affluent clients a clear fee justification.
+7. **The models make this usable.** A sign-up score puts about half of likely clients in the top 30% of contacts, a spend model sizes the ticket from income and expenses, and holdings point to the first service to offer (LIC holders → insurance review).
 """)
