@@ -1,0 +1,11 @@
+column,by,overall_missing,min_group,max_group,chi2_p
+annual_income_lakh,city_tier,0.0685,0.0574,0.0772,0.1527
+annual_income_lakh,occupation,0.0685,0.0534,0.0835,0.2288
+total_savings_lakh,city_tier,0.0942,0.0913,0.0973,0.8647
+total_savings_lakh,occupation,0.0942,0.0866,0.1063,0.8896
+expense_pct_income,city_tier,0.0518,0.0369,0.0573,0.0547
+expense_pct_income,occupation,0.0518,0.0412,0.0652,0.5121
+max_annual_fee_inr,city_tier,0.0658,0.0646,0.0674,0.947
+max_annual_fee_inr,occupation,0.0658,0.0573,0.078,0.771
+willing_monthly_investment_inr,city_tier,0.0285,0.0208,0.0431,0.0042
+willing_monthly_investment_inr,occupation,0.0285,0.0217,0.0341,0.7791

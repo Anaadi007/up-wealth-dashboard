@@ -1,0 +1,48 @@
+dataset,issue,rows_affected,action
+survey,Raw rows loaded,4110,—
+survey,Exact duplicate submissions,110,Removed
+survey,"Near-duplicates (same answers, different respondent id)",0,Checked; none found
+survey,Missingness test: missing vs city tier and occupation (10 chi-square tests),1,"Number of tests with p < 0.05; non-response is spread evenly, so group-median imputation is reasonable"
+survey,City names in wrong case or with trailing spaces,120,Mapped to the 13 canonical city names
+survey,Inconsistent Yes/No labels in target,60,Mapped to Yes/No
+survey,Failed attention check,70,Removed (careless respondents)
+survey,Same answer on all 5 attitude items,28,"Flagged (straightliner_flag), kept"
+survey,"Impossible ages (0, 4, 150, 199, 250)",25,"Set to missing, then imputed"
+survey,Retired but under 40 (contradiction),12,Removed
+survey,"Income typed in ₹ thousands (100× too big): above ₹300 L with a small investment, or above ₹2,000 L",27,Divided by 100
+survey,Negative investment amount,14,Sign corrected
+survey,Expenses above 100% of income,20,"Set to missing, then imputed"
+survey,Missing values: age,25,Median by city tier × occupation
+survey,Missing values: annual_income_lakh,271,Median by city tier × occupation
+survey,Missing values: total_savings_lakh,368,Median by city tier × occupation
+survey,Missing values: expense_pct_income,223,Median by city tier × occupation
+survey,Missing values: max_annual_fee_inr,256,Median by city tier × occupation
+survey,Missing values: risk_tolerance,82,Mode by city tier
+survey,Missing values: digital_comfort,85,Mode by city tier
+survey,Missing values: trust_in_advisors,90,Mode by city tier
+survey,Missing values: importance_face_to_face,62,Mode by city tier
+survey,Missing values: awareness_wealth_mgmt,85,Mode by city tier
+survey,Missing monthly investment (outcome),113,Kept as missing; excluded only where this column is analysed
+survey,Extreme incomes beyond Q3 + 3×IQR (genuine HNIs),210,"Kept, flagged (hni_flag); log scale used in analysis"
+survey,"K-Means segment quality (silhouette, k = 5)",0,"Silhouette = 0.15: weak separation, so segments are broad profiles, not sharp groups"
+survey,Derived features added,14,"literacy score, product/service/goal counts, logs, surplus, ratio, age & income bands, traditional_only, engage_flag, K-Means segment"
+survey,Clean rows written,3918,data/clean/survey_clean.csv
+pipeline,Raw rows loaded,3675,—
+pipeline,Duplicate lead records,75,Removed
+pipeline,"Near-duplicates (same date, city, age, income, RM; different lead id)",0,Checked; none found
+pipeline,"Inconsistent stage labels (e.g. 'CLIENT ', 'Proposal sent', 'Won')",140,Mapped to 6 standard stages
+pipeline,RM names in inconsistent case,80,Title-cased
+pipeline,Missing lead source,120,Labelled 'Unknown'
+pipeline,Closed date before created date,18,Closed date set to missing (cycle time unknown)
+pipeline,Negative first SIP amount,10,Sign corrected
+pipeline,Negative response time,10,Sign corrected
+pipeline,Income typed 100× too big,18,Divided by 100
+pipeline,Missing income,180,Median by segment
+pipeline,Missing response time for contacted leads,87,Median by lead source
+pipeline,"Acquisition-cost outliers above ₹1,531 (Q3 + 3×IQR)",12,"Capped at the threshold (winsorised), flagged"
+pipeline,Leads linked to a survey respondent (survey opt-in),600,Joined on survey_respondent_id
+pipeline,Linked leads whose respondent was removed in survey cleaning,15,Link kept but flagged (survey_link_valid = 0)
+pipeline,Linked leads whose segment label differed from the survey's K-Means segment,152,Segment harmonised to the survey's K-Means segment
+pipeline,Missing current SIP for won clients,13,Left missing (outcome variable)
+pipeline,Derived features added,15,"stage index + reached-stage flags, won flag, response/cycle times, month, buckets, income band, first-year AUM & trail revenue, SIP realisation"
+pipeline,Clean rows written,3600,data/clean/pipeline_clean.csv
